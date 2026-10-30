@@ -1,4 +1,9 @@
-# Ignore output JSON files
+# Generated certification reports and output repository
+Certificaciones/
+*.sqlite3
+*.sqlite3-journal
+*.sqlite
+*.db
 *.json
 
 # Byte-compiled / optimized / DLL files
