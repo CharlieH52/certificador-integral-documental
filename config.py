@@ -16,7 +16,9 @@ OUTPUT_DIRECTORY: str = "Certificaciones"
 # Nombre del archivo de base de datos SQLite3
 SQLITE_DB_NAME: str = "certificaciones.sqlite3"
 
-# Algoritmo de hash por defecto
+# Algoritmo de hash por defecto. Se resuelve con hashlib.new(), por lo que
+# acepta nombres como SHA256, SHA1, MD5, SHA512 o SHA3-256. El valor se guarda
+# en mayúsculas en los reportes JSON y en la base de datos SQLite3.
 DEFAULT_HASH_ALGORITHM: str = "SHA256"
 
 # Tamaño de bloque para lectura de archivos (64 KB)
@@ -65,5 +67,6 @@ NORMALIZATION_IGNORED_FILES: tuple[str, ...] = (
     "thumbs.db",
 )
 
-# Subcarpeta sugerida cuando se copia el árbol normalizado dentro del origen.
+# Subcarpeta sugerida para copias normalizadas. Actualmente es un valor
+# reservado: la interfaz solicita la carpeta de destino de forma explícita.
 NORMALIZATION_OUTPUT_SUBDIR: str = "normalizado"

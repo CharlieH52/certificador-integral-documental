@@ -19,10 +19,65 @@ from repository import (
 )
 
 
+# Alias habituales para los algoritmos más usados. La clave es el nombre
+# compactado (minúsculas y sin guiones) y el valor es el nombre que entiende
+# hashlib. Cualquier otro algoritmo disponible en hashlib también se acepta.
+_HASH_ALGORITHM_ALIASES: dict[str, str] = {
+    "sha256": "sha256",
+    "sha1": "sha1",
+    "sha512": "sha512",
+    "sha224": "sha224",
+    "sha384": "sha384",
+    "md5": "md5",
+    "sha3256": "sha3_256",
+    "sha3384": "sha3_384",
+    "sha3512": "sha3_512",
+}
+
+
+def resolve_hash_algorithm(algorithm: str) -> str:
+    """
+    Resuelve el nombre configurado a un algoritmo válido de hashlib.
+
+    Acepta nombres como ``SHA256``, ``SHA-256``, ``sha3-256`` o ``MD5``.
+    Lanza ``ValueError`` si el algoritmo no está disponible en el intérprete.
+    """
+    compact = algorithm.strip().lower().replace("-", "")
+    resolved = _HASH_ALGORITHM_ALIASES.get(compact, compact)
+    try:
+        hashlib.new(resolved)
+    except ValueError as error:
+        raise ValueError(
+            f"Algoritmo de hash no soportado: {algorithm!r}. "
+            "Usa un nombre disponible en hashlib.algorithms_available."
+        ) from error
+    return resolved
+
+
+def calculate_file_hash(
+    file_path: str,
+    algorithm: str | None = None,
+) -> str:
+    """
+    Calcula la huella hash de un archivo por bloques.
+
+    :param file_path: Ruta del archivo a procesar.
+    :param algorithm: Algoritmo a usar; por defecto, el de config.py.
+    :return: Hash en hexadecimal y en mayúsculas.
+    """
+    hasher = hashlib.new(
+        resolve_hash_algorithm(algorithm or config.DEFAULT_HASH_ALGORITHM)
+    )
+    with open(file_path, "rb") as file:
+        while chunk := file.read(config.HASH_CHUNK_SIZE):
+            hasher.update(chunk)
+    return hasher.hexdigest().upper()
+
+
 class CertifyMaker:
     """
     Motor de certificación de integridad de archivos.
-    Calcula huellas criptográficas SHA-256 de forma nativa en Python,
+    Calcula huellas criptográficas con el algoritmo configurado en config.py,
     extrae métricas de almacenamiento y permite persistir en JSON, SQLite3 y Texto.
     """
 
@@ -39,6 +94,11 @@ class CertifyMaker:
         self.save_json = save_json
         self.save_sqlite = save_sqlite
         self.progress_callback = progress_callback
+
+        # Valida el algoritmo al construir el motor para fallar con un mensaje
+        # claro antes de recorrer la unidad.
+        self.hash_algorithm = config.DEFAULT_HASH_ALGORITHM.strip().upper()
+        resolve_hash_algorithm(config.DEFAULT_HASH_ALGORITHM)
 
         self.working_path = os.path.join(os.getcwd(), config.OUTPUT_DIRECTORY)
         self.__check_output_directory()
@@ -152,17 +212,13 @@ class CertifyMaker:
             for ext, count in self.extensions_counter.items()
         ]
 
-    def __calculate_file_sha256(self, file_path: str) -> str:
-        """Calcula el hash SHA-256 de un archivo en bloques de 64 KB."""
-        sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            while chunk := f.read(config.HASH_CHUNK_SIZE):
-                sha256.update(chunk)
-        return sha256.hexdigest().upper()
+    def __calculate_file_hash(self, file_path: str) -> str:
+        """Calcula la huella hash del archivo con el algoritmo configurado."""
+        return calculate_file_hash(file_path, config.DEFAULT_HASH_ALGORITHM)
 
     def __execute_native_hashing(self) -> None:
         """
-        Escanea recursivamente el directorio objetivo, computando hashes SHA-256,
+        Escanea recursivamente el directorio objetivo, computando hashes,
         tamaños y extensiones en una sola pasada.
         """
         all_file_paths: list[str] = []
@@ -189,11 +245,11 @@ class CertifyMaker:
                 clean_ext = ext.lstrip(".").lower() if ext else "SIN_EXTENSION"
                 self.extensions_counter[clean_ext] += 1
 
-                # Hash SHA256
-                file_hash = self.__calculate_file_sha256(file_path)
+                # Hash con el algoritmo configurado
+                file_hash = self.__calculate_file_hash(file_path)
 
                 self.current_data.append({
-                    "Algorithm": config.DEFAULT_HASH_ALGORITHM,
+                    "Algorithm": self.hash_algorithm,
                     "Hash": file_hash,
                     "Path": file_path
                 })
@@ -231,7 +287,7 @@ class CertifyMaker:
                 drive_total_space=self.get_logical_drive_size(),
                 drive_used_space=self.get_logical_drive_used_space(),
                 drive_free_space=self.get_logical_drive_free_space(),
-                hash_algorithm=config.DEFAULT_HASH_ALGORITHM
+                hash_algorithm=self.hash_algorithm
             )
 
             extensions_records = [
