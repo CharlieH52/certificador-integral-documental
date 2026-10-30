@@ -28,7 +28,7 @@ class Interface:
         page.title = "Certificador de Integridad Documental - Huella HASH SHA-256"
         page.theme_mode = ft.ThemeMode.LIGHT
         page.bgcolor = "#F1F5F9"
-        page.padding = 16
+        page.padding = ft.Padding.only(left=16, top=16, right=16, bottom=24)
         page.window.alignment = ft.Alignment.CENTER
         page.window.maximizable = False
         page.window.resizable = False
