@@ -959,7 +959,36 @@ class Interface:
                                     border=ft.Border.all(1, "#E2E8F0"),
                                     border_radius=8,
                                     content=status_field
-                                )
+                                ),
+                                # Créditos y enlace al repositorio
+                                ft.Row(
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                    controls=[
+                                        ft.TextButton(
+                                            "Desarrollado por CharlieH52",
+                                            icon=ft.Icons.CODE,
+                                            url="https://github.com/CharlieH52",
+                                            tooltip="Perfil de GitHub",
+                                            style=ft.ButtonStyle(
+                                                color="#475569",
+                                                padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                                                overlay_color=ft.Colors.TRANSPARENT,
+                                            ),
+                                        ),
+                                        ft.TextButton(
+                                            "count-hashed-files",
+                                            icon=ft.Icons.FOLDER_OPEN,
+                                            url="https://github.com/CharlieH52/count-hashed-files",
+                                            tooltip="Repositorio en GitHub",
+                                            style=ft.ButtonStyle(
+                                                color="#475569",
+                                                padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                                                overlay_color=ft.Colors.TRANSPARENT,
+                                            ),
+                                        ),
+                                    ],
+                                ),
                             ]
                         )
                     )
