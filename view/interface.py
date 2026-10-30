@@ -977,9 +977,9 @@ class Interface:
                                             ),
                                         ),
                                         ft.TextButton(
-                                            "count-hashed-files",
+                                            "certificador-integral-documental",
                                             icon=ft.Icons.FOLDER_OPEN,
-                                            url="https://github.com/CharlieH52/count-hashed-files",
+                                            url="https://github.com/CharlieH52/certificador-integral-documental",
                                             tooltip="Repositorio en GitHub",
                                             style=ft.ButtonStyle(
                                                 color="#475569",
