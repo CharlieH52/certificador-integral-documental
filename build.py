@@ -1,101 +1,168 @@
+"""
+Compila y empaqueta la aplicación con ``flet pack``.
+
+``flet pack`` usa PyInstaller por debajo, así que no necesita Visual Studio
+Build Tools ni compila el runner de Flutter. El resultado es un ejecutable
+único en ``dist/GENERADOR_HUELLA_HASH.exe``.
+
+Uso:
+    python build.py            # ejecutable único para Windows
+    python build.py --clean    # limpia la caché de PyInstaller antes de compilar
+    python build.py --onedir   # genera una carpeta en lugar de un único .exe
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
 import subprocess
 import sys
-import shutil
-import os
 from pathlib import Path
 
+ARTIFACT_NAME = "GENERADOR_HUELLA_HASH"
+PRODUCT_NAME = "Generador de huella hash"
+DESCRIPTION = "Certificador de archivos con huella hash SHA-256"
+BUILD_VERSION = "1.0.0"
+FILE_VERSION = "1.0.0.0"
+OUTPUT_DIRECTORY = "dist"
 
-def build_exe():
-    output_name = "GENERADOR_HUELLA_HASH"
-    script_name = "main.py"
-    icon_file = None
-    
-    base_dir = Path(__file__).parent.resolve()
-    script_path = base_dir / script_name
-    dist_dir = base_dir / "dist"
-    build_dir = base_dir / "build"
-    spec_file = base_dir / f"{output_name}.spec"
+# Argumentos que se pasan directamente a PyInstaller. Se envían uno por uno
+# porque ``flet pack`` los recibe con ``--pyinstaller-build-args`` y argparse
+# interpretaría los que empiezan por guion como opciones de Flet.
+PYINSTALLER_ARGUMENTS = (
+    "--collect-all",
+    "flet",
+    "--exclude-module",
+    "tkinter",
+    "--exclude-module",
+    "_tkinter",
+    "--exclude-module",
+    "Tkinter",
+)
 
-    if not script_path.exists():
-        print(f"[ERROR] No se encontró: {script_path}")
-        sys.exit(1)
 
-    if shutil.which("pyinstaller") is None:
-        print("[ERROR] PyInstaller no está instalado.")
-        sys.exit(1)
+def find_flet_command() -> list[str]:
+    """Localiza el CLI de Flet en el entorno de Python actual."""
+    executable_name = "flet.exe" if sys.platform == "win32" else "flet"
+    beside_python = Path(sys.executable).parent / executable_name
+    if beside_python.is_file():
+        return [str(beside_python)]
 
-    # --- Limpieza profunda ---
-    print("[INFO] Limpiando builds anteriores...")
-    for folder in [dist_dir, build_dir]:
-        if folder.exists():
-            shutil.rmtree(folder)
-    if spec_file.exists():
-        spec_file.unlink()
+    in_path = shutil.which("flet")
+    if in_path:
+        return [in_path]
 
-    # --- Generar .spec base (SIN --noconfirm, SIN --clean) ---
-    makespec_cmd = [
-        sys.executable, "-m", "PyInstaller.utils.cliutils.makespec",
-        "--windowed",
-        "--onefile",
-        f"--name={output_name}",
-        "--collect-all", "flet",
-        str(script_path)
-    ]
-    
-    print("[INFO] Generando archivo .spec base...")
     try:
-        result = subprocess.run(makespec_cmd, check=True, capture_output=True, text=True)
-        print(result.stdout)
-    except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Falló pyi-makespec:\n{e.stderr}")
-        sys.exit(1)
-
-    # --- Modificar el .spec para excluir tkinter COMPLETAMENTE ---
-    spec_content = spec_file.read_text(encoding="utf-8")
-
-    # Busca la línea de excludes y reemplázala
-    if "excludes=" in spec_content:
-        spec_content = spec_content.replace(
-            "excludes=[],",
-            "excludes=['tkinter', '_tkinter', 'Tkinter'],"
+        import flet_cli.cli  # noqa: F401
+    except ImportError:
+        print(
+            "[ERROR] No se encontró Flet. Activa el entorno virtual e instala "
+            "las dependencias con: pip install -r requirements.txt",
+            file=sys.stderr,
         )
-    else:
-        # Fallback: insertar en el constructor de Analysis
-        spec_content = spec_content.replace(
-            "a = Analysis(",
-            "a = Analysis(\n    excludes=['tkinter', '_tkinter', 'Tkinter'],"
-        )
+        raise SystemExit(1)
 
-    spec_file.write_text(spec_content, encoding="utf-8")
-    print(f"[INFO] .spec modificado con excludes de tkinter")
+    # ``flet_cli`` no expone un módulo ejecutable con ``-m``; se invoca su
+    # función principal directamente.
+    return [sys.executable, "-c", "from flet_cli.cli import main; main()"]
 
-    # --- Compilar desde el .spec modificado ---
-    build_cmd = [
-        sys.executable, "-m", "PyInstaller",
-        str(spec_file),
-        "--clean",
-        "--noconfirm",
+
+def build_arguments(clean: bool, onedir: bool) -> list[str]:
+    """Construye los argumentos de ``flet pack``."""
+    arguments = [
+        "pack",
+        "main.py",
+        "--name",
+        ARTIFACT_NAME,
+        "--distpath",
+        OUTPUT_DIRECTORY,
+        "--product-name",
+        PRODUCT_NAME,
+        "--file-description",
+        DESCRIPTION,
+        "--product-version",
+        BUILD_VERSION,
+        "--file-version",
+        FILE_VERSION,
     ]
 
-    print(f"[INFO] Compilando desde spec...\n")
+    for pyinstaller_argument in PYINSTALLER_ARGUMENTS:
+        arguments.append(f"--pyinstaller-build-args={pyinstaller_argument}")
+    if clean:
+        arguments.append("--pyinstaller-build-args=--clean")
+
+    if onedir:
+        arguments.append("--onedir")
+    arguments.append("-y")
+    return arguments
+
+
+def build_exe(clean: bool = False, onedir: bool = False) -> int:
+    base_dir = Path(__file__).parent.resolve()
+    entry_point = base_dir / "main.py"
+
+    if not entry_point.is_file():
+        print(
+            f"[ERROR] No se encontró el punto de entrada: {entry_point}",
+            file=sys.stderr,
+        )
+        return 1
+
+    command = find_flet_command() + build_arguments(clean, onedir)
+    print("[INFO] Compilando con flet pack (PyInstaller)...")
+    print(f"[INFO] Comando: {' '.join(command)}")
+
+    # Evita problemas de codificación en consolas Windows que no usan UTF-8.
+    environment = os.environ.copy()
+    environment.setdefault("PYTHONIOENCODING", "utf-8")
+    environment["FLET_CLI_NO_RICH_OUTPUT"] = "1"
+
     try:
         result = subprocess.run(
-            build_cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace"
+            command, cwd=base_dir, check=False, env=environment
         )
-        print(result.stdout)
-        print(f"\n[OK] Ejecutable generado en: {dist_dir / output_name}.exe")
-        
-    except subprocess.CalledProcessError as e:
-        print(f"\n[ERROR] La compilación falló. Código: {e.returncode}")
-        print("\n--- STDOUT ---\n", e.stdout or "(vacío)")
-        print("\n--- STDERR ---\n", e.stderr or "(vacío)")
-        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n[INFO] Compilación cancelada por la persona usuaria.")
+        return 130
+    except OSError as error:
+        print(f"[ERROR] No se pudo ejecutar Flet: {error}", file=sys.stderr)
+        return 1
+
+    if result.returncode != 0:
+        print(
+            f"\n[ERROR] La compilación falló con el código {result.returncode}.",
+            file=sys.stderr,
+        )
+        return result.returncode
+
+    output_path = base_dir / OUTPUT_DIRECTORY
+    print(f"\n[OK] Paquete generado en: {output_path}")
+    if onedir:
+        executable = output_path / ARTIFACT_NAME / f"{ARTIFACT_NAME}.exe"
+        print(f"[OK] Ejecutable: {executable}")
+    else:
+        print(f"[OK] Ejecutable: {output_path / f'{ARTIFACT_NAME}.exe'}")
+    return 0
+
+
+def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Compila y empaqueta la aplicación con flet pack (PyInstaller)."
+    )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Elimina la caché de compilación de PyInstaller antes de empezar.",
+    )
+    parser.add_argument(
+        "--onedir",
+        action="store_true",
+        help="Genera una carpeta con el ejecutable en lugar de un único .exe.",
+    )
+    return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
-    build_exe()
+    options = parse_arguments()
+    raise SystemExit(build_exe(options.clean, options.onedir))
