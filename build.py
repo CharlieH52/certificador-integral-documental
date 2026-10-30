@@ -3,7 +3,7 @@ Compila y empaqueta la aplicación con ``flet pack``.
 
 ``flet pack`` usa PyInstaller por debajo, así que no necesita Visual Studio
 Build Tools ni compila el runner de Flutter. El resultado es un ejecutable
-único en ``dist/GENERADOR_HUELLA_HASH.exe``.
+único en ``dist/CERTIFICADOR_INTEGRIDAD.exe``.
 
 Uso:
     python build.py            # ejecutable único para Windows
@@ -20,9 +20,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-ARTIFACT_NAME = "GENERADOR_HUELLA_HASH"
-PRODUCT_NAME = "Generador de huella hash"
-DESCRIPTION = "Certificador de archivos con huella hash SHA-256"
+ARTIFACT_NAME = "CERTIFICADOR_INTEGRIDAD"
+PRODUCT_NAME = "Certificador de Integridad Documental"
+DESCRIPTION = "Certificación de integridad documental con huella hash SHA-256"
 BUILD_VERSION = "1.0.0"
 FILE_VERSION = "1.0.0.0"
 OUTPUT_DIRECTORY = "dist"

@@ -1,4 +1,4 @@
-# Certificador de archivos
+# Certificador de Integridad Documental
 Analiza la ruta especificada e itera sobre los archivos contenidos para generar un registro de los archivos con su respectiva huella hash hecha con SHA256. Integra opciones como conteo total de archivos analizados, espacio total utilizado por estos, listado de extensiones y conteo por extensión, además de proveer datos sobre la unidad analizada (capacidad total, espacio ocupado por los archivos y espacio libre en la unidad). Soporta almacenamiento estructurado en repositorio JSON, base de datos SQLite3 y exportación de resúmenes a texto plano (.txt).
 
 ## Detrás del proyecto
@@ -82,7 +82,7 @@ Ejecución:
 Compilar programa:
 > `python .\build.py`
 
-El paquete se genera en `dist/` (en Windows, `dist/GENERADOR_HUELLA_HASH.exe`). Para limpiar la caché de PyInstaller usa `python .\build.py --clean`; para generar una carpeta en lugar de un único `.exe` usa `python .\build.py --onedir`.
+El paquete se genera en `dist/` (en Windows, `dist/CERTIFICADOR_INTEGRIDAD.exe`). Para limpiar la caché de PyInstaller usa `python .\build.py --clean`; para generar una carpeta en lugar de un único `.exe` usa `python .\build.py --onedir`.
 
 > [!NOTE]  
 > En el archivo `config.py` es posible activar o desactivar el guardado de certificaciones en JSON (`SAVE_JSON_CERTIFICATIONS`) y SQLite3 (`SAVE_SQLITE_CERTIFICATIONS`), ajustar el comportamiento de la normalización de nombres (`NORMALIZATION_*`) y los parámetros de compilación en `build.py`.

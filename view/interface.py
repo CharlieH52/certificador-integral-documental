@@ -25,7 +25,7 @@ from view.normalization_dialog import (
 class Interface:
     async def main(self, page: ft.Page):
         # Configuración de la ventana y tema claro contemporáneo
-        page.title = "Certificador de archivos - Huella HASH SHA-256"
+        page.title = "Certificador de Integridad Documental - Huella HASH SHA-256"
         page.theme_mode = ft.ThemeMode.LIGHT
         page.bgcolor = "#F1F5F9"
         page.padding = 16

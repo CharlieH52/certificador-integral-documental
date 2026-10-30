@@ -1,5 +1,5 @@
 """
-Configuración global del Certificador de Archivos.
+Configuración global del Certificador de Integridad Documental.
 """
 
 # Constante de tipo boolean para activar y desactivar el almacenamiento
