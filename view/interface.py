@@ -8,24 +8,39 @@ import flet as ft
 import config
 from service.generate import CertifyMaker
 from service.file_validator import Validator, generate_dated_filename
+from service.normalization_engine import (
+    NormalizationApplier,
+    NormalizationCancelled,
+    NormalizationError,
+    NormalizationPlanner,
+    NormalizationUndo,
+)
+from view.normalization_dialog import (
+    NormalizationPreviewDialog,
+    NormalizationReviewDialog,
+    ask_confirmation,
+)
 
 
 class Interface:
     async def main(self, page: ft.Page):
         # Configuración de la ventana y tema claro contemporáneo
-        page.title = "Certificador de archivos - Huella HASH SHA-256"
+        page.title = "Certificador de Integridad Documental - Huella HASH SHA-256"
         page.theme_mode = ft.ThemeMode.LIGHT
         page.bgcolor = "#F1F5F9"
-        page.padding = 16
+        page.padding = ft.Padding.only(left=16, top=16, right=16, bottom=24)
         page.window.alignment = ft.Alignment.CENTER
         page.window.maximizable = False
         page.window.resizable = False
         page.window.shadow = True
         page.window.width = 910
-        page.window.height = 710
+        page.window.height = 740
 
         # Referencia al bucle de eventos principal para actualizaciones thread-safe
         main_loop = asyncio.get_running_loop()
+
+        # Última normalización aplicada, para habilitar la reversión.
+        last_normalization: list[dict[str, str] | None] = [None]
 
         async def __pick_folder_event(e: ft.ControlEvent):
             """Abre el diálogo nativo y espera el resultado con await."""
@@ -226,6 +241,395 @@ class Interface:
                 error_modal = __create_modal("Error de Exportación", f"No se pudo guardar el archivo TXT:\n{str(ex)}")
                 page.show_dialog(error_modal)
 
+        def __invalidate_certification() -> None:
+            """Una certificación previa deja de ser válida si cambian los nombres."""
+            if active_certify_maker[0] is None:
+                return
+            active_certify_maker[0] = None
+            export_txt_button.disabled = True
+            label_files.value = "-"
+            extension_list.controls.clear()
+            __add_new_status(
+                "La certificación anterior quedó desactualizada; vuelve a certificar."
+            )
+            page.update()
+
+        async def __ask_normalization_mode() -> str | None:
+            decision: asyncio.Future[str | None] = main_loop.create_future()
+
+            def close(mode: str | None) -> None:
+                if not decision.done():
+                    decision.set_result(mode)
+                page.pop_dialog()
+                page.update()
+
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Text(
+                    "Normalizar nombres",
+                    size=16,
+                    weight=ft.FontWeight.BOLD,
+                ),
+                content=ft.Container(
+                    width=560,
+                    content=ft.Column(
+                        tight=True,
+                        spacing=8,
+                        controls=[
+                            ft.Text(
+                                "Se eliminarán puntos, comas, barras y símbolos; "
+                                "se sustituirán los acentos por su letra base y se "
+                                "conservarán los paréntesis, los guiones y los "
+                                "guiones bajos.",
+                                size=12,
+                                color="#334155",
+                            ),
+                            ft.Text(
+                                "Renombrar en el lugar modifica el contenido "
+                                "seleccionado. Copiar deja el origen intacto y "
+                                "escribe el árbol normalizado en otra carpeta.",
+                                size=12,
+                                color="#334155",
+                            ),
+                            ft.Text(
+                                "Los nombres que excedan el límite se revisan "
+                                "contigo antes de aplicar cualquier cambio.",
+                                size=11,
+                                color="#64748B",
+                            ),
+                        ],
+                    ),
+                ),
+                actions=[
+                    ft.TextButton(
+                        "Cancelar", on_click=lambda event: close(None)
+                    ),
+                    ft.OutlinedButton(
+                        "Copiar a otra carpeta",
+                        on_click=lambda event: close("copy"),
+                    ),
+                    ft.FilledButton(
+                        "Renombrar en el lugar",
+                        on_click=lambda event: close("rename"),
+                    ),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+
+            page.show_dialog(dialog)
+            page.update()
+            return await decision
+
+        async def __run_normalization(
+            target_path: str, mode: str, destination: str | None
+        ) -> None:
+            __disable_components(True)
+            normalize_button.disabled = True
+            progress_bar.value = 0.0
+            progress_bar.visible = True
+            progress_label.visible = True
+            progress_label.value = "Analizando nombres..."
+            page.update()
+
+            mode_label = "renombrado" if mode == "rename" else "copia normalizada"
+            __add_new_status(f"Iniciando {mode_label}: {target_path}")
+
+            reviewer = NormalizationReviewDialog(page, main_loop)
+            last_update_time = [0.0]
+
+            def planning_progress(current: int, total: int, current_path: str):
+                now = time.time()
+                if now - last_update_time[0] < 0.1:
+                    return
+                last_update_time[0] = now
+                short_name = os.path.basename(current_path)[:38]
+
+                def force_update_ui():
+                    progress_label.value = f"Analizando ({current}): {short_name}"
+                    page.update()
+
+                main_loop.call_soon_threadsafe(force_update_ui)
+
+            try:
+                planner = NormalizationPlanner(
+                    target_path,
+                    mode=mode,  # type: ignore[arg-type]
+                    destination_root=destination,
+                    resolver=reviewer.ask,
+                    progress_callback=planning_progress,
+                )
+                plan = await asyncio.to_thread(planner.build)
+            except NormalizationCancelled:
+                __add_new_status("Normalización cancelada durante la revisión.")
+                return
+            except NormalizationError as ex:
+                __add_new_status(f"Aviso: {ex}")
+                page.show_dialog(
+                    __create_modal("No se pudo normalizar", str(ex))
+                )
+                return
+            except Exception as ex:
+                __add_new_status(f"Error al planificar la normalización: {ex}")
+                page.show_dialog(
+                    __create_modal(
+                        "Error al planificar",
+                        f"Ocurrió un error inesperado:\n{ex}",
+                    )
+                )
+                return
+            finally:
+                progress_bar.visible = False
+                progress_label.visible = False
+                __disable_components(False)
+                page.update()
+
+            if not plan.entries:
+                __add_new_status("No se encontraron archivos ni carpetas para procesar.")
+                return
+
+            if mode == "rename" and not plan.changes:
+                __add_new_status("No hay nombres que requieran normalización.")
+                return
+
+            confirmed = await NormalizationPreviewDialog(page).confirm(plan)
+            if not confirmed:
+                __add_new_status("Operación cancelada desde la vista previa.")
+                return
+
+            __disable_components(True)
+            normalize_button.disabled = True
+            progress_bar.value = 0.0
+            progress_bar.visible = True
+            progress_label.visible = True
+            progress_label.value = "Aplicando cambios..."
+            page.update()
+
+            def apply_progress(current: int, total: int, current_path: str):
+                if total <= 0:
+                    return
+
+                def force_update_ui():
+                    progress_bar.value = min(1.0, current / total)
+                    progress_label.value = (
+                        f"Aplicando ({current}/{total}): "
+                        f"{os.path.basename(current_path)[:30]}"
+                    )
+                    page.update()
+
+                main_loop.call_soon_threadsafe(force_update_ui)
+
+            try:
+                applier = NormalizationApplier(
+                    plan, progress_callback=apply_progress
+                )
+                result = await asyncio.to_thread(applier.apply)
+            except Exception as ex:
+                __add_new_status(f"Error al aplicar la normalización: {ex}")
+                page.show_dialog(
+                    __create_modal(
+                        "Error al aplicar",
+                        f"Ocurrió un error inesperado:\n{ex}",
+                    )
+                )
+                return
+            finally:
+                progress_bar.visible = False
+                progress_label.visible = False
+                __disable_components(False)
+                page.update()
+
+            if mode == "rename":
+                __add_new_status(f"Elementos renombrados: {result.renamed}")
+                if result.renamed:
+                    __invalidate_certification()
+            else:
+                __add_new_status(f"Archivos copiados: {result.copied_files}")
+                __add_new_status(
+                    f"Carpetas creadas: {result.created_directories}"
+                )
+
+            if result.skipped:
+                skipped_label = (
+                    "Elementos omitidos"
+                    if mode == "rename"
+                    else "Nombres conservados sin cambios"
+                )
+                __add_new_status(f"{skipped_label}: {result.skipped}")
+
+            for error in result.errors[:5]:
+                __add_new_status(f"Aviso: {error}")
+            if len(result.errors) > 5:
+                __add_new_status(
+                    f"Aviso: {len(result.errors) - 5} incidencia(s) adicionales."
+                )
+
+            if result.journal_path:
+                last_normalization[0] = {
+                    "journal": result.journal_path,
+                    "mode": mode,
+                }
+                undo_button.disabled = False
+                __add_new_status(
+                    f"Diario de reversión: {os.path.basename(result.journal_path)}"
+                )
+
+            title = (
+                "Normalización completada"
+                if result.completed and not result.errors
+                else "Normalización finalizada con avisos"
+            )
+            message_lines = [
+                f"Modo: {'renombrado en el lugar' if mode == 'rename' else 'copia normalizada'}",
+                f"Elementos analizados: {len(plan.entries)}",
+            ]
+            if mode == "rename":
+                message_lines.append(f"Renombrados: {result.renamed}")
+            else:
+                message_lines.append(f"Archivos copiados: {result.copied_files}")
+                message_lines.append(
+                    f"Carpetas creadas: {result.created_directories}"
+                )
+            if result.skipped:
+                message_lines.append(
+                    f"Omitidos: {result.skipped}"
+                    if mode == "rename"
+                    else f"Nombres conservados: {result.skipped}"
+                )
+            if result.errors:
+                message_lines.append(
+                    f"Incidencias: {len(result.errors)} (revisa la consola de eventos)"
+                )
+            if result.journal_path:
+                message_lines.append(
+                    f"Diario: {os.path.basename(result.journal_path)}"
+                )
+
+            page.show_dialog(
+                __create_modal(title, "\n".join(message_lines))
+            )
+
+        async def __normalize_event(e: ft.ControlEvent):
+            if not config.NORMALIZATION_ENABLED:
+                return
+
+            target_path = (input_path.value or "").strip()
+            validator = Validator(target_path, input_fileName.value or "")
+
+            if len(target_path) < 2:
+                __add_new_status(
+                    "Aviso: escribe o selecciona una ruta válida para normalizar."
+                )
+                return
+
+            if not validator.valid_dir_path():
+                __add_new_status(
+                    "Aviso: no se encontró el directorio para normalizar."
+                )
+                return
+
+            mode = await __ask_normalization_mode()
+            if mode is None:
+                return
+
+            destination = None
+            if mode == "copy":
+                destination = await ft.FilePicker().get_directory_path()
+                if not destination:
+                    __add_new_status("Aviso: copia normalizada cancelada.")
+                    return
+
+            await __run_normalization(target_path, mode, destination)
+
+        async def __undo_normalization(e: ft.ControlEvent):
+            state = last_normalization[0]
+            if not state:
+                __add_new_status("Aviso: no hay una normalización reciente que deshacer.")
+                return
+
+            is_copy = state["mode"] == "copy"
+            message = (
+                "Se eliminarán únicamente los archivos y carpetas creados por la "
+                "última copia normalizada. Los archivos preexistentes en el destino "
+                "no se tocan."
+                if is_copy
+                else "Se restaurarán los nombres originales de la última "
+                "normalización. Si algún nombre original ya está ocupado, ese "
+                "elemento se conservará y se reportará como conflicto."
+            )
+
+            confirmed = await ask_confirmation(
+                page,
+                "Deshacer normalización",
+                message,
+                "Eliminar copias" if is_copy else "Deshacer",
+                danger=is_copy,
+            )
+            if not confirmed:
+                return
+
+            __disable_components(True)
+            normalize_button.disabled = True
+            progress_bar.visible = True
+            progress_bar.value = 0.0
+            progress_label.visible = True
+            progress_label.value = "Revirtiendo cambios..."
+            page.update()
+
+            try:
+                undo = NormalizationUndo(state["journal"])
+                result = await asyncio.to_thread(undo.undo)
+            except NormalizationError as ex:
+                __add_new_status(f"Aviso: {ex}")
+                page.show_dialog(
+                    __create_modal("No se pudo deshacer", str(ex))
+                )
+                return
+            except Exception as ex:
+                __add_new_status(f"Error al deshacer: {ex}")
+                page.show_dialog(
+                    __create_modal(
+                        "Error al deshacer",
+                        f"Ocurrió un error inesperado:\n{ex}",
+                    )
+                )
+                return
+            finally:
+                progress_bar.visible = False
+                progress_label.visible = False
+                __disable_components(False)
+                page.update()
+
+            if is_copy:
+                __add_new_status(f"Archivos eliminados: {result.removed_files}")
+                __add_new_status(
+                    f"Carpetas eliminadas: {result.removed_directories}"
+                )
+            else:
+                __add_new_status(f"Nombres restaurados: {result.restored}")
+                if result.restored:
+                    __invalidate_certification()
+
+            for error in result.errors[:5]:
+                __add_new_status(f"Aviso: {error}")
+
+            if not result.errors:
+                last_normalization[0] = None
+                undo_button.disabled = True
+
+            page.show_dialog(
+                __create_modal(
+                    "Reversión completada"
+                    if not result.errors
+                    else "Reversión finalizada con avisos",
+                    "Los cambios se revirtieron correctamente."
+                    if not result.errors
+                    else (
+                        "Se revirtieron los cambios posibles. "
+                        f"Incidencias: {len(result.errors)}."
+                    ),
+                )
+            )
+
         def __clean_components(e: ft.ControlEvent):
             active_certify_maker[0] = None
             state_totalStorage.value = "-"
@@ -250,9 +654,12 @@ class Interface:
                 browse_button,
                 make_button,
                 clean_button,
+                normalize_button,
+                undo_button,
             ]
             for control in controls:
                 control.disabled = component_state
+            undo_button.disabled = component_state or last_normalization[0] is None
             page.update()
 
         # ELEMENTOS DE LA INTERFAZ (TEMA CLARO Y DISTRIBUCIÓN COHERENTE)
@@ -325,6 +732,28 @@ class Interface:
             height=38
         )
 
+        normalize_button = ft.FilledTonalButton(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.DRIVE_FILE_RENAME_OUTLINE_ROUNDED, size=18),
+                    ft.Text("Normalizar nombres", weight=ft.FontWeight.W_600),
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            style=ft.ButtonStyle(bgcolor="#EEF2FF", color="#3730A3"),
+            on_click=__normalize_event,
+            visible=config.NORMALIZATION_ENABLED,
+            expand=True,
+            height=36,
+        )
+        undo_button = ft.IconButton(
+            icon=ft.Icons.UNDO_ROUNDED,
+            icon_color="#B45309",
+            tooltip="Deshacer la última normalización",
+            on_click=__undo_normalization,
+            disabled=True,
+        )
+
         progress_bar = ft.ProgressBar(value=0.0, visible=False, color="#2563EB", bgcolor="#E2E8F0")
         progress_label = ft.Text(value="", size=11, visible=False, color="#475569", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER)
 
@@ -376,7 +805,7 @@ class Interface:
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         vertical_alignment=ft.CrossAxisAlignment.STRETCH,
                         spacing=12,
-                        height=440,
+                        height=486,
                         controls=[
                             # PANEL IZQUIERDO: Entradas, Acciones y Contador
                             ft.Container(
@@ -414,6 +843,11 @@ class Interface:
                                                 ft.Row(
                                                     controls=[make_button, clean_button],
                                                     spacing=8
+                                                ),
+                                                ft.Row(
+                                                    controls=[normalize_button, undo_button],
+                                                    spacing=8,
+                                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                                 ),
                                                 export_txt_button,
                                                 ft.Column(
@@ -525,7 +959,36 @@ class Interface:
                                     border=ft.Border.all(1, "#E2E8F0"),
                                     border_radius=8,
                                     content=status_field
-                                )
+                                ),
+                                # Créditos y enlace al repositorio
+                                ft.Row(
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                    controls=[
+                                        ft.TextButton(
+                                            "Desarrollado por CharlieH52",
+                                            icon=ft.Icons.CODE,
+                                            url="https://github.com/CharlieH52",
+                                            tooltip="Perfil de GitHub",
+                                            style=ft.ButtonStyle(
+                                                color="#475569",
+                                                padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                                                overlay_color=ft.Colors.TRANSPARENT,
+                                            ),
+                                        ),
+                                        ft.TextButton(
+                                            "count-hashed-files",
+                                            icon=ft.Icons.FOLDER_OPEN,
+                                            url="https://github.com/CharlieH52/count-hashed-files",
+                                            tooltip="Repositorio en GitHub",
+                                            style=ft.ButtonStyle(
+                                                color="#475569",
+                                                padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                                                overlay_color=ft.Colors.TRANSPARENT,
+                                            ),
+                                        ),
+                                    ],
+                                ),
                             ]
                         )
                     )
